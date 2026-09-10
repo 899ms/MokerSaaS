@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getUserPointsDetail } from '@/lib/points-manager'
+import { getUserPointsDetail } from '@/lib/points'
 
 export async function GET() {
   try {

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
+import { deductPoints } from '@/lib/points'
 import { db } from '@/lib/db'
-import { users, pointsHistory } from '@/lib/schema'
+import { users } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
-import { nanoid } from 'nanoid'
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,7 +38,9 @@ export async function POST(request: NextRequest) {
     const userList = await db
       .select({
         id: users.id,
-        points: users.points
+        points: users.points,
+        purchasedPoints: users.purchasedPoints,
+        giftedPoints: users.giftedPoints,
       })
       .from(users)
       .where(eq(users.email, session.user.email))
@@ -52,7 +54,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 检查积分是否足够
+    // 校验积分足够（前置校验，保持原有 400 语义）
     if ((user.points || 0) < points) {
       return NextResponse.json(
         { success: false, error: 'points_insufficient' },
@@ -60,41 +62,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 扣除积分并记录历史（不使用事务，因为neon-http不支持）
-    const newPoints = (user.points || 0) - points
-
-    // 1. 扣除积分
-    await db
-      .update(users)
-      .set({
-        points: newPoints,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, user.id))
-
-    // 2. 记录积分历史
-    await db.insert(pointsHistory).values({
-      id: nanoid(),
-      userId: user.id,
-      points: -points, // 负数表示扣除
-      pointsType: 'purchased', // 默认扣除购买的积分
-      action: type,
-      description: description,
-      createdAt: new Date()
-    })
-
-    const result = { points: newPoints }
+    // 调用 lib/points.ts 的 deductPoints：
+    // - 优先扣赠送积分，剩余再扣购买积分
+    // - 只写一条 history 记录（action 使用传入的 type）
+    // - 入口拦截过期订阅（expireSubscriptionIfNeeded）
+    const newPoints = await deductPoints(user.id, points, description, type)
 
     return NextResponse.json({
       success: true,
       message: 'points_deducted_successfully',
       data: {
         deductedPoints: points,
-        remainingPoints: result.points,
-        description: description
-      }
+        remainingPoints: newPoints,
+        description: description,
+      },
     })
-
   } catch (error) {
     console.error('积分扣除失败:', error)
     return NextResponse.json(
