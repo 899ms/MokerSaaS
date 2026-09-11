@@ -19,7 +19,7 @@ export async function generateMetadata({
   const t = await getTranslations({ locale, namespace: 'auth' })
 
   return {
-    title: t('signup_meta_title'),
+    title: t('signup_title'),
     description: t('signup_description'),
     robots: { index: false },
   }

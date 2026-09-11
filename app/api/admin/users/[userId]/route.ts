@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { users, pointsHistory } from '@/lib/schema'
-import { eq, desc, sql } from 'drizzle-orm'
+import { users, pointsHistory, stripePayments } from '@/lib/schema'
+import { eq, desc, and, sql } from 'drizzle-orm'
 import { isAdmin } from '@/lib/auth-utils'
 import { v4 as uuidv4 } from 'uuid'
 import { getSubscriptionGiftedPoints } from '@/lib/points'
@@ -21,6 +21,9 @@ export async function GET(
     }
 
     const { userId } = await params
+    const { searchParams } = new URL(request.url)
+    const historyLimit = Math.min(50, Math.max(1, parseInt(searchParams.get('historyLimit') || '10')))
+    const paymentsLimit = Math.min(50, Math.max(1, parseInt(searchParams.get('paymentsLimit') || '10')))
 
     // 获取用户详细信息
     const user = await db
@@ -36,17 +39,66 @@ export async function GET(
       )
     }
 
-    // 获取用户积分历史
+    // 获取用户积分历史（最近 N 条，管理员可使用专门接口分页查询完整记录）
     const pointsHistoryData = await db
-      .select()
+      .select({
+        id: pointsHistory.id,
+        userId: pointsHistory.userId,
+        points: pointsHistory.points,
+        pointsType: pointsHistory.pointsType,
+        action: pointsHistory.action,
+        description: pointsHistory.description,
+        createdAt: pointsHistory.createdAt,
+      })
       .from(pointsHistory)
       .where(eq(pointsHistory.userId, userId))
       .orderBy(desc(pointsHistory.createdAt))
-      .limit(20)
+      .limit(historyLimit)
+
+    // 获取用户最近支付记录
+    const paymentsRaw = await db
+      .select()
+      .from(stripePayments)
+      .where(eq(stripePayments.userId, userId))
+      .orderBy(desc(stripePayments.createdAt))
+      .limit(paymentsLimit)
+
+    const payments = paymentsRaw.map((p) => ({
+      ...p,
+      metadata: p.metadata ? safeParseJson(p.metadata) : null,
+    }))
+
+    // 积分 / 支付 聚合
+    const pointsAgg = await db
+      .select({
+        totalEarned: sql<number>`coalesce(sum(case when ${pointsHistory.points} > 0 then ${pointsHistory.points} else 0 end), 0)`,
+        totalSpent: sql<number>`coalesce(sum(case when ${pointsHistory.points} < 0 then -${pointsHistory.points} else 0 end), 0)`,
+      })
+      .from(pointsHistory)
+      .where(eq(pointsHistory.userId, userId))
+
+    const paymentsAgg = await db
+      .select({
+        totalCount: sql<number>`count(*)`,
+        succeededAmount: sql<number>`coalesce(sum(case when ${stripePayments.paymentStatus} = 'succeeded' then ${stripePayments.amount} else 0 end), 0)`,
+        refundedAmount: sql<number>`coalesce(sum(case when ${stripePayments.paymentStatus} = 'refunded' then ${stripePayments.refundAmount} else 0 end), 0)`,
+      })
+      .from(stripePayments)
+      .where(eq(stripePayments.userId, userId))
 
     return NextResponse.json({
       user: user[0],
-      pointsHistory: pointsHistoryData
+      pointsHistory: pointsHistoryData,
+      pointsHistoryMeta: {
+        totalEarned: Number(pointsAgg[0]?.totalEarned || 0),
+        totalSpent: Number(pointsAgg[0]?.totalSpent || 0),
+      },
+      payments,
+      paymentsMeta: {
+        totalCount: Number(paymentsAgg[0]?.totalCount || 0),
+        succeededAmount: Number(paymentsAgg[0]?.succeededAmount || 0),
+        refundedAmount: Number(paymentsAgg[0]?.refundedAmount || 0),
+      },
     })
   } catch (error) {
     console.error('Get user details error:', error)
@@ -291,5 +343,13 @@ export async function PUT(
       { error: 'server_error' },
       { status: 500 }
     )
+  }
+}
+
+function safeParseJson(raw: string): any {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
   }
 }

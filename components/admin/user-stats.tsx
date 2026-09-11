@@ -24,7 +24,12 @@ import {
   Eye,
   Calendar,
   Mail,
-  MoreHorizontal
+  MoreHorizontal,
+  History,
+  Wallet,
+  ChevronLeft,
+  ChevronRight,
+  X
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { zhCN, enUS, ja as jaLocale, ko as koLocale } from 'date-fns/locale'
@@ -105,6 +110,8 @@ export function UserStats() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [actionType, setActionType] = useState<'role' | 'points' | 'subscription' | null>(null)
+  const [pointsHistoryDialogOpen, setPointsHistoryDialogOpen] = useState(false)
+  const [paymentsDialogOpen, setPaymentsDialogOpen] = useState(false)
 
   const fetchStats = async () => {
     try {
@@ -512,6 +519,28 @@ export function UserStats() {
                         >
                           <CreditCard className="h-4 w-4" />
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedUser(user)
+                            setPointsHistoryDialogOpen(true)
+                          }}
+                          title={t('user_list.table.view_points_history')}
+                        >
+                          <History className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedUser(user)
+                            setPaymentsDialogOpen(true)
+                          }}
+                          title={t('user_list.table.view_payments')}
+                        >
+                          <Wallet className="h-4 w-4" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -556,6 +585,20 @@ export function UserStats() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onUpdate={handleUpdateUser}
+      />
+
+      {/* 积分历史对话框 */}
+      <PointsHistoryDialog
+        user={selectedUser}
+        open={pointsHistoryDialogOpen}
+        onOpenChange={setPointsHistoryDialogOpen}
+      />
+
+      {/* 支付记录对话框 */}
+      <PaymentsDialog
+        user={selectedUser}
+        open={paymentsDialogOpen}
+        onOpenChange={setPaymentsDialogOpen}
       />
     </div>
   )
@@ -849,6 +892,555 @@ function UserActionDialog({
             {t('dialogs.confirm')}
           </Button>
         </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ============================================================
+// 积分历史对话框（管理员查看用户的积分明细）
+// ============================================================
+
+interface PointsHistoryItem {
+  id: string
+  points: number
+  pointsType: string
+  action: string
+  description: string | null
+  createdAt: string | Date
+}
+
+interface PointsHistoryResponse {
+  success: boolean
+  user?: { id: string; email: string; name: string | null }
+  history: PointsHistoryItem[]
+  stats: {
+    totalEarned: number
+    totalSpent: number
+    purchasedPoints: number
+    giftedPoints: number
+    currentPoints: number
+  }
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
+function PointsHistoryDialog({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: User | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations('admin.users')
+  const locale = useLocale()
+  const [data, setData] = useState<PointsHistoryResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(20)
+  const [pointsTypeFilter, setPointsTypeFilter] = useState('all')
+
+  const fetchHistory = async () => {
+    if (!user) return
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString(),
+      })
+      if (pointsTypeFilter && pointsTypeFilter !== 'all') {
+        params.append('pointsType', pointsTypeFilter)
+      }
+      const res = await fetch(`/api/admin/users/${user.id}/points-history?${params}`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || `HTTP ${res.status}`)
+      }
+      const json: PointsHistoryResponse = await res.json()
+      setData(json)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('messages.fetch_history_failed'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (open) {
+      setPage(1)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, pointsTypeFilter])
+
+  useEffect(() => {
+    if (open) fetchHistory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, page, limit, pointsTypeFilter])
+
+  const formatDateTime = (d: string | Date) =>
+    format(
+      new Date(d),
+      (locale === 'zh-CN' || locale === 'zh-TW' || locale === 'ja' || locale === 'ko')
+        ? 'yyyy年MM月dd日 HH:mm'
+        : 'MMM dd, yyyy HH:mm',
+      { locale: getDateFnsLocale(locale) }
+    )
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            {t('points_history.title')}
+          </DialogTitle>
+          <DialogDescription>
+            {t('dialogs.user_info', { name: user?.name || t('dialogs.no_name'), email: user?.email || '' })}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">{t('points_history.filter_type')}:</span>
+            <Select value={pointsTypeFilter} onValueChange={setPointsTypeFilter}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('points_history.all_types')}</SelectItem>
+                <SelectItem value="purchased">{t('points_history.type_purchased')}</SelectItem>
+                <SelectItem value="gifted">{t('points_history.type_gifted')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-sm text-muted-foreground">{t('user_list.page_size_10').split(' ')[0]}:</span>
+            <Select value={String(limit)} onValueChange={(v) => { setLimit(parseInt(v, 10)); setPage(1) }}>
+              <SelectTrigger className="w-[90px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="20">20</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={fetchHistory} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        </div>
+
+        {/* 统计概览 */}
+        {data?.stats && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
+            <StatBox label={t('points_history.current_points')} value={data.stats.currentPoints} />
+            <StatBox label={t('points_history.purchased_points')} value={data.stats.purchasedPoints} />
+            <StatBox label={t('points_history.gifted_points')} value={data.stats.giftedPoints} />
+            <StatBox label={t('points_history.total_earned')} value={`+${data.stats.totalEarned}`} positive />
+            <StatBox label={t('points_history.total_spent')} value={`-${data.stats.totalSpent}`} negative />
+          </div>
+        )}
+
+        {error && (
+          <div className="text-sm text-destructive py-2">{error}</div>
+        )}
+
+        <div className="flex-1 overflow-auto border rounded-md">
+          <Table>
+            <TableHeader className="sticky top-0 bg-background">
+              <TableRow>
+                <TableHead>{t('points_history.col_time')}</TableHead>
+                <TableHead>{t('points_history.col_action')}</TableHead>
+                <TableHead>{t('points_history.col_type')}</TableHead>
+                <TableHead className="text-right">{t('points_history.col_change')}</TableHead>
+                <TableHead>{t('points_history.col_desc')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && !data && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    {t('points_history.loading')}
+                  </TableCell>
+                </TableRow>
+              )}
+              {data?.history?.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    {t('points_history.empty')}
+                  </TableCell>
+                </TableRow>
+              )}
+              {data?.history?.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="text-xs whitespace-nowrap">
+                    {formatDateTime(item.createdAt)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{item.action}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {item.pointsType === 'purchased' ? t('points_history.type_purchased') : t('points_history.type_gifted')}
+                  </TableCell>
+                  <TableCell className={`text-right font-mono ${item.points > 0 ? 'text-green-600' : item.points < 0 ? 'text-red-600' : ''}`}>
+                    {item.points > 0 ? `+${item.points}` : item.points}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-[260px] truncate" title={item.description || ''}>
+                    {item.description || '-'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* 分页 */}
+        {data && data.pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between pt-3">
+            <div className="text-sm text-muted-foreground">
+              {t('pagination.page_info', { page: data.pagination.page, totalPages: data.pagination.totalPages })} |{' '}
+              {t('pagination.total_records', { total: data.pagination.total })}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1}>
+                <ChevronLeft className="h-4 w-4" />
+                {t('pagination.previous')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage(Math.min(data.pagination.totalPages, page + 1))}
+                disabled={page >= data.pagination.totalPages}
+              >
+                {t('pagination.next')}
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function StatBox({ label, value, positive, negative }: { label: string; value: number | string; positive?: boolean; negative?: boolean }) {
+  const color = positive ? 'text-green-600' : negative ? 'text-red-600' : ''
+  return (
+    <div className="rounded-md border bg-card px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={`text-lg font-semibold ${color}`}>{value}</div>
+    </div>
+  )
+}
+
+// ============================================================
+// 支付记录对话框（管理员查看用户的 Stripe 支付明细）
+// ============================================================
+
+interface PaymentRecord {
+  id: string
+  paymentType: string
+  paymentStatus: string
+  amount: number
+  currency: string
+  productName: string | null
+  pointsAmount: number | null
+  pointsType: string | null
+  subscriptionPlan: string | null
+  refundAmount: number | null
+  refundReason: string | null
+  refundedAt: string | Date | null
+  paymentIntentId: string | null
+  checkoutSessionId: string | null
+  invoiceId: string | null
+  subscriptionId: string | null
+  createdAt: string | Date
+}
+
+interface PaymentsResponse {
+  success: boolean
+  user?: { id: string; email: string; name: string | null }
+  payments: PaymentRecord[]
+  stats: {
+    totalPayments: number
+    succeededAmount: number
+    refundedAmount: number
+    succeededCount: number
+    failedCount: number
+    refundedCount: number
+    subscriptionCount: number
+    pointsPurchaseCount: number
+    totalPointsPurchased: number
+    totalPointsGifted: number
+  }
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
+function PaymentsDialog({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: User | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations('admin.users')
+  const locale = useLocale()
+  const [data, setData] = useState<PaymentsResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(20)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+
+  const fetchPayments = async () => {
+    if (!user) return
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString(),
+      })
+      if (typeFilter && typeFilter !== 'all') params.append('paymentType', typeFilter)
+      if (statusFilter && statusFilter !== 'all') params.append('paymentStatus', statusFilter)
+      const res = await fetch(`/api/admin/users/${user.id}/payments?${params}`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || `HTTP ${res.status}`)
+      }
+      const json: PaymentsResponse = await res.json()
+      setData(json)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('messages.fetch_payments_failed'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (open) setPage(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, typeFilter, statusFilter])
+
+  useEffect(() => {
+    if (open) fetchPayments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, page, limit, typeFilter, statusFilter])
+
+  const formatDateTime = (d: string | Date) =>
+    format(
+      new Date(d),
+      (locale === 'zh-CN' || locale === 'zh-TW' || locale === 'ja' || locale === 'ko')
+        ? 'yyyy年MM月dd日 HH:mm'
+        : 'MMM dd, yyyy HH:mm',
+      { locale: getDateFnsLocale(locale) }
+    )
+
+  const formatCurrency = (cents: number, currency = 'USD') =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100)
+
+  const paymentTypeLabel = (pt: string) => {
+    if (pt === 'subscription') return t('payments.type_subscription')
+    if (pt === 'points_purchase') return t('payments.type_points_purchase')
+    if (pt === 'one_time') return t('payments.type_one_time')
+    return pt
+  }
+
+  const paymentStatusBadge = (ps: string) => {
+    const variant: 'default' | 'secondary' | 'destructive' | 'outline' =
+      ps === 'succeeded' ? 'default' :
+      ps === 'failed' ? 'destructive' :
+      ps === 'refunded' ? 'secondary' : 'outline'
+    const label =
+      ps === 'succeeded' ? t('payments.status_succeeded') :
+      ps === 'failed' ? t('payments.status_failed') :
+      ps === 'pending' ? t('payments.status_pending') :
+      ps === 'refunded' ? t('payments.status_refunded') :
+      ps === 'cancelled' ? t('payments.status_cancelled') : ps
+    return <Badge variant={variant}>{label}</Badge>
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wallet className="h-5 w-5" />
+            {t('payments.title')}
+          </DialogTitle>
+          <DialogDescription>
+            {t('dialogs.user_info', { name: user?.name || t('dialogs.no_name'), email: user?.email || '' })}
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* 筛选 */}
+        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">{t('payments.filter_type')}:</span>
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('payments.all_types')}</SelectItem>
+                <SelectItem value="subscription">{t('payments.type_subscription')}</SelectItem>
+                <SelectItem value="points_purchase">{t('payments.type_points_purchase')}</SelectItem>
+                <SelectItem value="one_time">{t('payments.type_one_time')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">{t('payments.filter_status')}:</span>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('payments.all_statuses')}</SelectItem>
+                <SelectItem value="succeeded">{t('payments.status_succeeded')}</SelectItem>
+                <SelectItem value="failed">{t('payments.status_failed')}</SelectItem>
+                <SelectItem value="pending">{t('payments.status_pending')}</SelectItem>
+                <SelectItem value="refunded">{t('payments.status_refunded')}</SelectItem>
+                <SelectItem value="cancelled">{t('payments.status_cancelled')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-sm text-muted-foreground">Page:</span>
+            <Select value={String(limit)} onValueChange={(v) => { setLimit(parseInt(v, 10)); setPage(1) }}>
+              <SelectTrigger className="w-[90px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="20">20</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={fetchPayments} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        </div>
+
+        {/* 统计 */}
+        {data?.stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            <StatBox label={t('payments.total_count')} value={data.stats.totalPayments} />
+            <StatBox label={t('payments.succeeded_amount')} value={formatCurrency(data.stats.succeededAmount)} positive />
+            <StatBox label={t('payments.refunded_amount')} value={formatCurrency(data.stats.refundedAmount || 0)} negative />
+            <StatBox
+              label={t('payments.total_points')}
+              value={`+${(data.stats.totalPointsPurchased || 0) + (data.stats.totalPointsGifted || 0)}`}
+              positive
+            />
+          </div>
+        )}
+
+        {error && (
+          <div className="text-sm text-destructive py-2">{error}</div>
+        )}
+
+        <div className="flex-1 overflow-auto border rounded-md">
+          <Table>
+            <TableHeader className="sticky top-0 bg-background">
+              <TableRow>
+                <TableHead>{t('payments.col_time')}</TableHead>
+                <TableHead>{t('payments.col_type')}</TableHead>
+                <TableHead>{t('payments.col_status')}</TableHead>
+                <TableHead className="text-right">{t('payments.col_amount')}</TableHead>
+                <TableHead className="text-right">{t('payments.col_points')}</TableHead>
+                <TableHead>{t('payments.col_product')}</TableHead>
+                <TableHead>{t('payments.col_refund')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && !data && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    {t('payments.loading')}
+                  </TableCell>
+                </TableRow>
+              )}
+              {data?.payments?.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    {t('payments.empty')}
+                  </TableCell>
+                </TableRow>
+              )}
+              {data?.payments?.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="text-xs whitespace-nowrap">{formatDateTime(p.createdAt)}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{paymentTypeLabel(p.paymentType)}</Badge>
+                  </TableCell>
+                  <TableCell>{paymentStatusBadge(p.paymentStatus)}</TableCell>
+                  <TableCell className="text-right font-mono">
+                    {formatCurrency(p.amount, p.currency)}
+                  </TableCell>
+                  <TableCell className="text-right text-xs">
+                    {p.pointsAmount ? `+${p.pointsAmount} (${p.pointsType || '-'})` : '-'}
+                  </TableCell>
+                  <TableCell className="text-xs max-w-[200px] truncate" title={p.productName || ''}>
+                    {p.productName || (p.subscriptionPlan ? `${t('payments.col_plan')}: ${p.subscriptionPlan}` : '-')}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {p.refundAmount ? (
+                      <span className="text-orange-600">
+                        {formatCurrency(p.refundAmount, p.currency)}
+                        {p.refundedAt ? ` · ${format(new Date(p.refundedAt), 'MM-dd')}` : ''}
+                      </span>
+                    ) : '-'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {data && data.pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between pt-3">
+            <div className="text-sm text-muted-foreground">
+              {t('pagination.page_info', { page: data.pagination.page, totalPages: data.pagination.totalPages })} |{' '}
+              {t('pagination.total_records', { total: data.pagination.total })}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1}>
+                <ChevronLeft className="h-4 w-4" />
+                {t('pagination.previous')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage(Math.min(data.pagination.totalPages, page + 1))}
+                disabled={page >= data.pagination.totalPages}
+              >
+                {t('pagination.next')}
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
