@@ -939,6 +939,7 @@ function PointsHistoryDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const t = useTranslations('admin.users')
+  const tPoints = useTranslations('profile')
   const locale = useLocale()
   const [data, setData] = useState<PointsHistoryResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -984,6 +985,54 @@ function PointsHistoryDialog({
     if (open) fetchHistory()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, page, limit, pointsTypeFilter])
+
+  // 积分历史 action 字段 -> 当前 locale 下的可读描述。
+  // 数据库里的 description 是写入时的硬编码字符串（多数为中文），直接渲染会出现英文界面显示中文。
+  // 这里按 action 走翻译 key（profile.points_actions.*），保证 UI 语言切换时描述也跟着切换。
+  const getPointsActionDisplay = (action: string, description: string | null | undefined): string => {
+    // 从中文硬编码描述里提取订阅计划名（数据库里没有结构化 plan 字段，只能反向解析）
+    const planName = description ? description.match(/(?:订阅|续订|升级)([A-Za-z]+)\s*赠送积分/)?.[1]
+      ?? description.match(/(?:订阅|续订|升级)([A-Za-z]+)赠送积分/)?.[1]
+      : null
+    const planDisplay = planName
+      ? (() => {
+          try {
+            const v = tPoints(`plan_${planName.toLowerCase()}`)
+            return v || planName.charAt(0).toUpperCase() + planName.slice(1)
+          } catch {
+            return planName.charAt(0).toUpperCase() + planName.slice(1)
+          }
+        })()
+      : ''
+
+    switch (action) {
+      case 'register':
+        return tPoints('points_actions.register')
+      case 'email_verify':
+        return tPoints('points_actions.email_verify')
+      case 'daily_login':
+        return tPoints('points_actions.daily_login')
+      case 'referral':
+        return tPoints('points_actions.referral')
+      case 'manual':
+        return tPoints('points_actions.manual')
+      case 'purchase':
+        return tPoints('points_actions.purchase')
+      case 'subscription_gift':
+        return tPoints('points_actions.subscription_gift', { plan: planDisplay })
+      case 'subscription_renewal_gift':
+        return tPoints('points_actions.subscription_renewal_gift', { plan: planDisplay })
+      case 'subscription_upgrade_gift':
+        return tPoints('points_actions.subscription_upgrade_gift', { plan: planDisplay })
+      case 'subscription_reward':
+        return tPoints('points_actions.subscription_reward')
+      case 'subscription_expired':
+        return tPoints('points_actions.subscription_expired')
+      default:
+        // 未知 action：回退到原始 description，最后回退到 unknown 翻译
+        return description || tPoints('points_actions.unknown')
+    }
+  }
 
   const formatDateTime = (d: string | Date) =>
     format(
@@ -1095,8 +1144,8 @@ function PointsHistoryDialog({
                   <TableCell className={`text-right font-mono ${item.points > 0 ? 'text-green-600' : item.points < 0 ? 'text-red-600' : ''}`}>
                     {item.points > 0 ? `+${item.points}` : item.points}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground max-w-[260px] truncate" title={item.description || ''}>
-                    {item.description || '-'}
+                  <TableCell className="text-xs text-muted-foreground max-w-[260px] truncate" title={getPointsActionDisplay(item.action, item.description)}>
+                    {getPointsActionDisplay(item.action, item.description)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -1201,6 +1250,7 @@ function PaymentsDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const t = useTranslations('admin.users')
+  const tPoints = useTranslations('profile')
   const locale = useLocale()
   const [data, setData] = useState<PaymentsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1276,6 +1326,33 @@ function PaymentsDialog({
       ps === 'refunded' ? t('payments.status_refunded') :
       ps === 'cancelled' ? t('payments.status_cancelled') : ps
     return <Badge variant={variant}>{label}</Badge>
+  }
+
+  // 订阅计划名 / Stripe 产品名 -> 当前 locale 翻译（profile.plan_*）
+  // 仅保留英文 / 数字部分作为翻译 key，避免 "Pro订阅" 之类的中文后缀导致找不到键
+  const getPlanDisplayName = (v: string | null | undefined): string => {
+    if (!v) return ''
+    const asciiPart = v.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '')
+    const tryKeys = asciiPart ? [asciiPart] : []
+    try {
+      for (const k of tryKeys) {
+        const translated = tPoints(`plan_${k}`)
+        if (translated && translated !== `plan_${k}`) return translated
+      }
+    } catch {
+      // fall through
+    }
+    return v
+  }
+
+  // Points 列：同时翻译 points type（purchased / gifted）
+  const pointsColumn = (pointsAmount: number | null, pointsType: string | null | undefined) => {
+    if (!pointsAmount) return '-'
+    const typeLabel =
+      pointsType === 'purchased' ? t('points_history.type_purchased') :
+      pointsType === 'gifted' ? t('points_history.type_gifted') :
+      pointsType || '-'
+    return `+${pointsAmount} (${typeLabel})`
   }
 
   return (
@@ -1399,10 +1476,14 @@ function PaymentsDialog({
                     {formatCurrency(p.amount, p.currency)}
                   </TableCell>
                   <TableCell className="text-right text-xs">
-                    {p.pointsAmount ? `+${p.pointsAmount} (${p.pointsType || '-'})` : '-'}
+                    {pointsColumn(p.pointsAmount, p.pointsType)}
                   </TableCell>
                   <TableCell className="text-xs max-w-[200px] truncate" title={p.productName || ''}>
-                    {p.productName || (p.subscriptionPlan ? `${t('payments.col_plan')}: ${p.subscriptionPlan}` : '-')}
+                    {p.productName
+                      ? getPlanDisplayName(p.productName)
+                      : (p.subscriptionPlan
+                        ? `${t('payments.col_plan')}: ${getPlanDisplayName(p.subscriptionPlan)}`
+                        : '-')}
                   </TableCell>
                   <TableCell className="text-xs">
                     {p.refundAmount ? (

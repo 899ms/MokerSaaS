@@ -307,6 +307,9 @@ export function PaymentHistory() {
       if (lowerProductName.includes('pro')) {
         return getPlanDisplayName('pro')
       }
+      if (lowerProductName.includes('annual')) {
+        return getPlanDisplayName('annual')
+      }
       if (lowerProductName.includes('enterprise')) {
         return getPlanDisplayName('enterprise')
       }
